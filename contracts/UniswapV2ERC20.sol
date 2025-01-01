@@ -11,7 +11,7 @@ contract UniswapV2ERC20 is IUniswapV2ERC20 {
     uint8 public constant decimals = 18;
 
     // LP是给流动性提供者提供的那一部分手续费 不直接给他们代币 而是给他们铸造一种token叫LP
-    // 这里的lpTotal指的是总量
+    // 这里的totalSupply指的是总量
     uint public totalSupply;
     // 每个用户的LP数量
     mapping(address => uint) public balanceOf;

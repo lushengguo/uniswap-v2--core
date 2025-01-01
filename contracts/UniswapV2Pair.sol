@@ -44,11 +44,7 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
         unlocked = 1;
     }
 
-    function getReserves()
-        public
-        view
-        returns (uint112 reserve0, uint112 reserve1, uint32 oldBlockTimestampLast)
-    {
+    function getReserves() public view returns (uint112 reserve0, uint112 reserve1, uint32 oldBlockTimestampLast) {
         reserve0 = reserve0;
         reserve1 = reserve1;
         oldBlockTimestampLast = blockTimestampLast;
@@ -100,12 +96,7 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
     }
 
     // update reserves and, on the first call per block, price accumulators
-    function _update(
-        uint balance0,
-        uint balance1,
-        uint112 reserve0,
-        uint112 reserve1
-    ) private {
+    function _update(uint balance0, uint balance1, uint112 reserve0, uint112 reserve1) private {
         require(balance0 <= uint112(-1) && balance1 <= uint112(-1), 'UniswapV2: OVERFLOW');
 
         // 相当于block.timestamp % (2 ^ 32)
@@ -180,24 +171,38 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
         (uint112 reserve0, uint112 reserve1, ) = getReserves(); // gas savings
         uint balance0 = IERC20(token0).balanceOf(address(this));
         uint balance1 = IERC20(token1).balanceOf(address(this));
+
+        // this function was called after user transfer money into it
+        // so the balance of this contract subs previous reserve cache is how many money user transfer in
+        // smart-contract runs in single thread, so there is no race-condition
+        // unless some idiot call trasferTo and didn't call mint in same contract
         uint amount0 = balance0.sub(reserve0);
         uint amount1 = balance1.sub(reserve1);
 
         bool feeOn = _mintFee(reserve0, reserve1);
-        uint lpTotalCopy = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
-        if (lpTotalCopy == 0) {
+        uint _totalSupply = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
+        if (_totalSupply == 0) {
+            // here is possible to overflow, after solidity 0.8.0, overflow will throw exception
+            // if liquidity is overflow, below _mint already MINIMUM_LIQUIDITY LP
+            // and totalSupply will re-overflow to unexpected value
+            // but balanceOf is correct, this contract would met internal error
+            // shit only happends when liquidity pool is empty
             liquidity = Math.sqrt(amount0.mul(amount1)).sub(MINIMUM_LIQUIDITY);
+
+            // locking the first MINIMUM_LIQUIDITY will cost first user who provided liquidity can't
+            // retrive all his money when only him provided liquidity
             _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens
         } else {
-            liquidity = Math.min(
-                amount0.mul(lpTotalCopy) / reserve0,
-                amount1.mul(lpTotalCopy) / reserve1
-            );
+            liquidity = Math.min(amount0.mul(_totalSupply) / reserve0, amount1.mul(_totalSupply) / reserve1);
         }
         require(liquidity > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED');
+
+        // mint LP for liquidity provider and feeTo address
         _mint(to, liquidity);
 
+        // update history liquidity and price data for future statistic
         _update(balance0, balance1, reserve0, reserve1);
+
         if (feeOn) kLast = uint(reserve0).mul(reserve1); // reserve0 and reserve1 are up-to-date
         emit Mint(msg.sender, amount0, amount1);
     }
@@ -209,12 +214,15 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
         address _token1 = token1; // gas savings
         uint balance0 = IERC20(_token0).balanceOf(address(this));
         uint balance1 = IERC20(_token1).balanceOf(address(this));
+
+        // this concept is similar as tokenA and tokenB in mint
+        // the liquidity is how many LP user transfer to this contract
         uint liquidity = balanceOf[address(this)];
 
         bool feeOn = _mintFee(reserve0, reserve1);
-        uint lpTotalCopy = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
-        amount0 = liquidity.mul(balance0) / lpTotalCopy; // using balances ensures pro-rata distribution
-        amount1 = liquidity.mul(balance1) / lpTotalCopy; // using balances ensures pro-rata distribution
+        uint _totalSupply = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
+        amount0 = liquidity.mul(balance0) / _totalSupply; // using balances ensures pro-rata distribution
+        amount1 = liquidity.mul(baalnce1) / _totalSupply; // using balances ensures pro-rata distribution
         require(amount0 > 0 && amount1 > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED');
         _burn(address(this), liquidity);
         _safeTransfer(_token0, to, amount0);
@@ -240,23 +248,33 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
             address _token0 = token0;
             address _token1 = token1;
             require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO');
+
+            // chatgpt said this is optimistically transferring
+            // to simplize code logic
             if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out); // optimistically transfer tokens
             if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out); // optimistically transfer tokens
             if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
             balance0 = IERC20(_token0).balanceOf(address(this));
             balance1 = IERC20(_token1).balanceOf(address(this));
         }
-        uint amount0In = balance0 > reserve0 - amount0Out
-            ? balance0 - (reserve0 - amount0Out)
-            : 0;
-        uint amount1In = balance1 > reserve1 - amount1Out
-            ? balance1 - (reserve1 - amount1Out)
-            : 0;
+
+        // with tx fee, so there is > instead of >=
+        // amount0In = token0ToSwap + fee
+        // there is a wired algorithm, 0.3% fee means 1000units took 997units as input and 3units as fee
+        uint amount0In = balance0 > reserve0 - amount0Out ? balance0 - (reserve0 - amount0Out) : 0;
+        uint amount1In = balance1 > reserve1 - amount1Out ? balance1 - (reserve1 - amount1Out) : 0;
         require(amount0In > 0 || amount1In > 0, 'UniswapV2: INSUFFICIENT_INPUT_AMOUNT');
+
         {
             // scope for reserve{0,1}Adjusted, avoids stack too deep errors
+            // according to the previous wired algorithm, the fee is amount0In * 0.003
             uint balance0Adjusted = balance0.mul(1000).sub(amount0In.mul(3));
             uint balance1Adjusted = balance1.mul(1000).sub(amount1In.mul(3));
+
+            // AMM ensures tokenA * tokenB = k
+            // After swap, tokenA * tokenB should be the same as before
+            // But this contract has 0.3% fee, so after swap tokenA * tokenB should be bigger
+            // Bcz one of them added the fee
             require(
                 balance0Adjusted.mul(balance1Adjusted) >= uint(reserve0).mul(reserve1).mul(1000 ** 2),
                 'UniswapV2: K'
@@ -271,17 +289,17 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
     function skim(address to) external lock {
         address _token0 = token0; // gas savings
         address _token1 = token1; // gas savings
+
+        // once transfer too much tokens to this contract, I think this is the way to retrive them
+        // before other user use them in mint()
         _safeTransfer(_token0, to, IERC20(_token0).balanceOf(address(this)).sub(reserve0));
         _safeTransfer(_token1, to, IERC20(_token1).balanceOf(address(this)).sub(reserve1));
     }
 
     // force reserves to match balances
+    // force giving money to this contract instead of get LP as return
+    // charity?
     function sync() external lock {
-        _update(
-            IERC20(token0).balanceOf(address(this)),
-            IERC20(token1).balanceOf(address(this)),
-            reserve0,
-            reserve1
-        );
+        _update(IERC20(token0).balanceOf(address(this)), IERC20(token1).balanceOf(address(this)), reserve0, reserve1);
     }
 }
