@@ -249,10 +249,20 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
             address _token1 = token1;
             require(to != _token0 && to != _token1, 'UniswapV2: INVALID_TO');
 
-            // chatgpt said this is optimistically transferring
-            // to simplize code logic
+            // optimistically transfering
+            // put check code afterward, this is not gonna be a re-entrancy attack
             if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out); // optimistically transfer tokens
             if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out); // optimistically transfer tokens
+
+            // this is the most funny part, the flash loan
+            // user borrowed money from previous _safeTransfer call
+            // and below uniswapV2Call with call the impl of user contract
+            // user could use those money to do some arbitrage
+            // then transfer back the money to this contract in current tx before uniswapV2Call returns
+            //
+            // if earns money, then the arbitrage is successful
+            // if failed, tx rollback
+            // he paid gas and the fee of uniswapV2Call for this arbitrage opportunity
             if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
             balance0 = IERC20(_token0).balanceOf(address(this));
             balance1 = IERC20(_token1).balanceOf(address(this));
