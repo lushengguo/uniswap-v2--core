@@ -47,10 +47,10 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
     function getReserves()
         public
         view
-        returns (uint112 oldToken0Amount, uint112 oldToken1Amount, uint32 oldBlockTimestampLast)
+        returns (uint112 reserve0, uint112 reserve1, uint32 oldBlockTimestampLast)
     {
-        oldToken0Amount = reserve0;
-        oldToken1Amount = reserve1;
+        reserve0 = reserve0;
+        reserve1 = reserve1;
         oldBlockTimestampLast = blockTimestampLast;
     }
 
@@ -101,12 +101,12 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
 
     // update reserves and, on the first call per block, price accumulators
     function _update(
-        uint newToken0Amount,
-        uint newToken1Amount,
-        uint112 oldToken0Amount,
-        uint112 oldToken1Amount
+        uint balance0,
+        uint balance1,
+        uint112 reserve0,
+        uint112 reserve1
     ) private {
-        require(newToken0Amount <= uint112(-1) && newToken1Amount <= uint112(-1), 'UniswapV2: OVERFLOW');
+        require(balance0 <= uint112(-1) && balance1 <= uint112(-1), 'UniswapV2: OVERFLOW');
 
         // 相当于block.timestamp % (2 ^ 32)
         // block.timestamp是uint256
@@ -116,14 +116,14 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
         // 如果溢出 10 - ( 2^32 - 1) = 10 + 1 = 11
         uint32 timeElapsed = blockTimestamp - blockTimestampLast; // overflow is desired
 
-        if (timeElapsed > 0 && oldToken0Amount != 0 && oldToken1Amount != 0) {
+        if (timeElapsed > 0 && reserve0 != 0 && reserve1 != 0) {
             // * never overflows, and + overflow is desired
 
             // UQ112x112.encode()
             // 用于固定点数运算的编码方式，表示一个 112.112 位的定点数，用来实现更高精度的价格计算
             //
-            // uint price0 = UQ112x112.encode(oldToken1Amount).uqdiv(oldToken0Amount);
-            // uint price1 = UQ112x112.encode(oldToken0Amount).uqdiv(oldToken1Amount);
+            // uint price0 = UQ112x112.encode(reserve1).uqdiv(reserve0);
+            // uint price1 = UQ112x112.encode(reserve0).uqdiv(reserve1);
             // price0：表示 1 个 token0 值多少 token1。
             // price1：表示 1 个 token1 值多少 token0。
             // price0CumulativeLast += price0 * timeElapsed;
@@ -136,18 +136,18 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
             // 如果只存储上次到这次的价格 那么计算一个比较长时间的TWAP的时候就就要翻遍时间段内的所有block
             // 现在的这种做法就只需要翻两个block
             // 我的理解是这里有点over design 后面再关注这里的实际用法
-            price0CumulativeLast += uint(UQ112x112.encode(oldToken1Amount).uqdiv(oldToken1Amount)) * timeElapsed;
-            price1CumulativeLast += uint(UQ112x112.encode(oldToken0Amount).uqdiv(oldToken0Amount)) * timeElapsed;
+            price0CumulativeLast += uint(UQ112x112.encode(reserve1).uqdiv(reserve1)) * timeElapsed;
+            price1CumulativeLast += uint(UQ112x112.encode(reserve0).uqdiv(reserve0)) * timeElapsed;
         }
 
-        reserve0 = uint112(newToken0Amount);
-        reserve1 = uint112(newToken1Amount);
+        reserve0 = uint112(balance0);
+        reserve1 = uint112(balance1);
         blockTimestampLast = blockTimestamp;
         emit Sync(reserve0, reserve1);
     }
 
     // if fee is on, mint liquidity equivalent to 1/6th of the growth in sqrt(k)
-    function _mintFee(uint112 oldToken0Amount, uint112 oldToken1Amount) private returns (bool feeOn) {
+    function _mintFee(uint112 reserve0, uint112 reserve1) private returns (bool feeOn) {
         // factory里是否设置了feeTo 如果设置了代表要收手续费
         address feeTo = IUniswapV2Factory(factory).feeTo();
         feeOn = feeTo != address(0);
@@ -155,7 +155,7 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
         uint _kLast = kLast; // gas savings
         if (feeOn) {
             if (_kLast != 0) {
-                uint rootK = Math.sqrt(uint(oldToken0Amount).mul(oldToken1Amount));
+                uint rootK = Math.sqrt(uint(reserve0).mul(reserve1));
                 uint rootKLast = Math.sqrt(_kLast);
 
                 // reserve0 * reserve1 增加的话代表流动性增加了
@@ -177,52 +177,52 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
     // this low-level function should be called from a contract which performs important safety checks
     // 铸币
     function mint(address to) external lock returns (uint liquidity) {
-        (uint112 oldToken0Amount, uint112 oldToken1Amount, ) = getReserves(); // gas savings
-        uint newToken0Amount = IERC20(token0).balanceOf(address(this));
-        uint newToken1Amount = IERC20(token1).balanceOf(address(this));
-        uint amount0 = newToken0Amount.sub(oldToken0Amount);
-        uint amount1 = newToken1Amount.sub(oldToken1Amount);
+        (uint112 reserve0, uint112 reserve1, ) = getReserves(); // gas savings
+        uint balance0 = IERC20(token0).balanceOf(address(this));
+        uint balance1 = IERC20(token1).balanceOf(address(this));
+        uint amount0 = balance0.sub(reserve0);
+        uint amount1 = balance1.sub(reserve1);
 
-        bool feeOn = _mintFee(oldToken0Amount, oldToken1Amount);
+        bool feeOn = _mintFee(reserve0, reserve1);
         uint lpTotalCopy = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
         if (lpTotalCopy == 0) {
             liquidity = Math.sqrt(amount0.mul(amount1)).sub(MINIMUM_LIQUIDITY);
             _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens
         } else {
             liquidity = Math.min(
-                amount0.mul(lpTotalCopy) / oldToken0Amount,
-                amount1.mul(lpTotalCopy) / oldToken1Amount
+                amount0.mul(lpTotalCopy) / reserve0,
+                amount1.mul(lpTotalCopy) / reserve1
             );
         }
         require(liquidity > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_MINTED');
         _mint(to, liquidity);
 
-        _update(newToken0Amount, newToken1Amount, oldToken0Amount, oldToken1Amount);
+        _update(balance0, balance1, reserve0, reserve1);
         if (feeOn) kLast = uint(reserve0).mul(reserve1); // reserve0 and reserve1 are up-to-date
         emit Mint(msg.sender, amount0, amount1);
     }
 
     // this low-level function should be called from a contract which performs important safety checks
     function burn(address to) external lock returns (uint amount0, uint amount1) {
-        (uint112 oldToken0Amount, uint112 oldToken1Amount, ) = getReserves(); // gas savings
+        (uint112 reserve0, uint112 reserve1, ) = getReserves(); // gas savings
         address _token0 = token0; // gas savings
         address _token1 = token1; // gas savings
-        uint newToken0Amount = IERC20(_token0).balanceOf(address(this));
-        uint newToken1Amount = IERC20(_token1).balanceOf(address(this));
+        uint balance0 = IERC20(_token0).balanceOf(address(this));
+        uint balance1 = IERC20(_token1).balanceOf(address(this));
         uint liquidity = balanceOf[address(this)];
 
-        bool feeOn = _mintFee(oldToken0Amount, oldToken1Amount);
+        bool feeOn = _mintFee(reserve0, reserve1);
         uint lpTotalCopy = totalSupply; // gas savings, must be defined here since totalSupply can update in _mintFee
-        amount0 = liquidity.mul(newToken0Amount) / lpTotalCopy; // using balances ensures pro-rata distribution
-        amount1 = liquidity.mul(newToken1Amount) / lpTotalCopy; // using balances ensures pro-rata distribution
+        amount0 = liquidity.mul(balance0) / lpTotalCopy; // using balances ensures pro-rata distribution
+        amount1 = liquidity.mul(balance1) / lpTotalCopy; // using balances ensures pro-rata distribution
         require(amount0 > 0 && amount1 > 0, 'UniswapV2: INSUFFICIENT_LIQUIDITY_BURNED');
         _burn(address(this), liquidity);
         _safeTransfer(_token0, to, amount0);
         _safeTransfer(_token1, to, amount1);
-        newToken0Amount = IERC20(_token0).balanceOf(address(this));
-        newToken1Amount = IERC20(_token1).balanceOf(address(this));
+        balance0 = IERC20(_token0).balanceOf(address(this));
+        balance1 = IERC20(_token1).balanceOf(address(this));
 
-        _update(newToken0Amount, newToken1Amount, oldToken0Amount, oldToken1Amount);
+        _update(balance0, balance1, reserve0, reserve1);
         if (feeOn) kLast = uint(reserve0).mul(reserve1); // reserve0 and reserve1 are up-to-date
         emit Burn(msg.sender, amount0, amount1, to);
     }
@@ -230,11 +230,11 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
     // this low-level function should be called from a contract which performs important safety checks
     function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external lock {
         require(amount0Out > 0 || amount1Out > 0, 'UniswapV2: INSUFFICIENT_OUTPUT_AMOUNT');
-        (uint112 oldToken0Amount, uint112 oldToken1Amount, ) = getReserves(); // gas savings
-        require(amount0Out < oldToken0Amount && amount1Out < oldToken1Amount, 'UniswapV2: INSUFFICIENT_LIQUIDITY');
+        (uint112 reserve0, uint112 reserve1, ) = getReserves(); // gas savings
+        require(amount0Out < reserve0 && amount1Out < reserve1, 'UniswapV2: INSUFFICIENT_LIQUIDITY');
 
-        uint newToken0Amount;
-        uint newToken1Amount;
+        uint balance0;
+        uint balance1;
         {
             // scope for _token{0,1}, avoids stack too deep errors
             address _token0 = token0;
@@ -243,27 +243,27 @@ contract UniswapV2Pair is IUniswapV2Pair, UniswapV2ERC20 {
             if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out); // optimistically transfer tokens
             if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out); // optimistically transfer tokens
             if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
-            newToken0Amount = IERC20(_token0).balanceOf(address(this));
-            newToken1Amount = IERC20(_token1).balanceOf(address(this));
+            balance0 = IERC20(_token0).balanceOf(address(this));
+            balance1 = IERC20(_token1).balanceOf(address(this));
         }
-        uint amount0In = newToken0Amount > oldToken0Amount - amount0Out
-            ? newToken0Amount - (oldToken0Amount - amount0Out)
+        uint amount0In = balance0 > reserve0 - amount0Out
+            ? balance0 - (reserve0 - amount0Out)
             : 0;
-        uint amount1In = newToken1Amount > oldToken1Amount - amount1Out
-            ? newToken1Amount - (oldToken1Amount - amount1Out)
+        uint amount1In = balance1 > reserve1 - amount1Out
+            ? balance1 - (reserve1 - amount1Out)
             : 0;
         require(amount0In > 0 || amount1In > 0, 'UniswapV2: INSUFFICIENT_INPUT_AMOUNT');
         {
             // scope for reserve{0,1}Adjusted, avoids stack too deep errors
-            uint balance0Adjusted = newToken0Amount.mul(1000).sub(amount0In.mul(3));
-            uint balance1Adjusted = newToken1Amount.mul(1000).sub(amount1In.mul(3));
+            uint balance0Adjusted = balance0.mul(1000).sub(amount0In.mul(3));
+            uint balance1Adjusted = balance1.mul(1000).sub(amount1In.mul(3));
             require(
-                balance0Adjusted.mul(balance1Adjusted) >= uint(oldToken0Amount).mul(oldToken1Amount).mul(1000 ** 2),
+                balance0Adjusted.mul(balance1Adjusted) >= uint(reserve0).mul(reserve1).mul(1000 ** 2),
                 'UniswapV2: K'
             );
         }
 
-        _update(newToken0Amount, newToken1Amount, oldToken0Amount, oldToken1Amount);
+        _update(balance0, balance1, reserve0, reserve1);
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
 
