@@ -37,10 +37,10 @@ describe('UniswapV2Pair', () => {
   })
 
   it('mint', async () => {
-    const token0Amount = expandTo18Decimals(1)
-    const token1Amount = expandTo18Decimals(4)
-    await token0.transfer(pair.address, token0Amount)
-    await token1.transfer(pair.address, token1Amount)
+    const reserve0 = expandTo18Decimals(1)
+    const reserve1 = expandTo18Decimals(4)
+    await token0.transfer(pair.address, reserve0)
+    await token1.transfer(pair.address, reserve1)
 
     const expectedLiquidity = expandTo18Decimals(2)
     await expect(pair.mint(wallet.address, overrides))
@@ -49,22 +49,22 @@ describe('UniswapV2Pair', () => {
       .to.emit(pair, 'Transfer')
       .withArgs(AddressZero, wallet.address, expectedLiquidity.sub(MINIMUM_LIQUIDITY))
       .to.emit(pair, 'Sync')
-      .withArgs(token0Amount, token1Amount)
+      .withArgs(reserve0, reserve1)
       .to.emit(pair, 'Mint')
-      .withArgs(wallet.address, token0Amount, token1Amount)
+      .withArgs(wallet.address, reserve0, reserve1)
 
     expect(await pair.totalSupply()).to.eq(expectedLiquidity)
     expect(await pair.balanceOf(wallet.address)).to.eq(expectedLiquidity.sub(MINIMUM_LIQUIDITY))
-    expect(await token0.balanceOf(pair.address)).to.eq(token0Amount)
-    expect(await token1.balanceOf(pair.address)).to.eq(token1Amount)
+    expect(await token0.balanceOf(pair.address)).to.eq(reserve0)
+    expect(await token1.balanceOf(pair.address)).to.eq(reserve1)
     const reserves = await pair.getReserves()
-    expect(reserves[0]).to.eq(token0Amount)
-    expect(reserves[1]).to.eq(token1Amount)
+    expect(reserves[0]).to.eq(reserve0)
+    expect(reserves[1]).to.eq(reserve1)
   })
 
-  async function addLiquidity(token0Amount: BigNumber, token1Amount: BigNumber) {
-    await token0.transfer(pair.address, token0Amount)
-    await token1.transfer(pair.address, token1Amount)
+  async function addLiquidity(reserve0: BigNumber, reserve1: BigNumber) {
+    await token0.transfer(pair.address, reserve0)
+    await token1.transfer(pair.address, reserve1)
     await pair.mint(wallet.address, overrides)
   }
   const swapTestCases: BigNumber[][] = [
@@ -80,8 +80,8 @@ describe('UniswapV2Pair', () => {
   ].map(a => a.map(n => (typeof n === 'string' ? bigNumberify(n) : expandTo18Decimals(n))))
   swapTestCases.forEach((swapTestCase, i) => {
     it(`getInputPrice:${i}`, async () => {
-      const [swapAmount, token0Amount, token1Amount, expectedOutputAmount] = swapTestCase
-      await addLiquidity(token0Amount, token1Amount)
+      const [swapAmount, reserve0, reserve1, expectedOutputAmount] = swapTestCase
+      await addLiquidity(reserve0, reserve1)
       await token0.transfer(pair.address, swapAmount)
       await expect(pair.swap(0, expectedOutputAmount.add(1), wallet.address, '0x', overrides)).to.be.revertedWith(
         'UniswapV2: K'
@@ -98,8 +98,8 @@ describe('UniswapV2Pair', () => {
   ].map(a => a.map(n => (typeof n === 'string' ? bigNumberify(n) : expandTo18Decimals(n))))
   optimisticTestCases.forEach((optimisticTestCase, i) => {
     it(`optimistic:${i}`, async () => {
-      const [outputAmount, token0Amount, token1Amount, inputAmount] = optimisticTestCase
-      await addLiquidity(token0Amount, token1Amount)
+      const [outputAmount, reserve0, reserve1, inputAmount] = optimisticTestCase
+      await addLiquidity(reserve0, reserve1)
       await token0.transfer(pair.address, inputAmount)
       await expect(pair.swap(outputAmount.add(1), 0, wallet.address, '0x', overrides)).to.be.revertedWith(
         'UniswapV2: K'
@@ -109,9 +109,9 @@ describe('UniswapV2Pair', () => {
   })
 
   it('swap:token0', async () => {
-    const token0Amount = expandTo18Decimals(5)
-    const token1Amount = expandTo18Decimals(10)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(5)
+    const reserve1 = expandTo18Decimals(10)
+    await addLiquidity(reserve0, reserve1)
 
     const swapAmount = expandTo18Decimals(1)
     const expectedOutputAmount = bigNumberify('1662497915624478906')
@@ -120,25 +120,25 @@ describe('UniswapV2Pair', () => {
       .to.emit(token1, 'Transfer')
       .withArgs(pair.address, wallet.address, expectedOutputAmount)
       .to.emit(pair, 'Sync')
-      .withArgs(token0Amount.add(swapAmount), token1Amount.sub(expectedOutputAmount))
+      .withArgs(reserve0.add(swapAmount), reserve1.sub(expectedOutputAmount))
       .to.emit(pair, 'Swap')
       .withArgs(wallet.address, swapAmount, 0, 0, expectedOutputAmount, wallet.address)
 
     const reserves = await pair.getReserves()
-    expect(reserves[0]).to.eq(token0Amount.add(swapAmount))
-    expect(reserves[1]).to.eq(token1Amount.sub(expectedOutputAmount))
-    expect(await token0.balanceOf(pair.address)).to.eq(token0Amount.add(swapAmount))
-    expect(await token1.balanceOf(pair.address)).to.eq(token1Amount.sub(expectedOutputAmount))
+    expect(reserves[0]).to.eq(reserve0.add(swapAmount))
+    expect(reserves[1]).to.eq(reserve1.sub(expectedOutputAmount))
+    expect(await token0.balanceOf(pair.address)).to.eq(reserve0.add(swapAmount))
+    expect(await token1.balanceOf(pair.address)).to.eq(reserve1.sub(expectedOutputAmount))
     const totalSupplyToken0 = await token0.totalSupply()
     const totalSupplyToken1 = await token1.totalSupply()
-    expect(await token0.balanceOf(wallet.address)).to.eq(totalSupplyToken0.sub(token0Amount).sub(swapAmount))
-    expect(await token1.balanceOf(wallet.address)).to.eq(totalSupplyToken1.sub(token1Amount).add(expectedOutputAmount))
+    expect(await token0.balanceOf(wallet.address)).to.eq(totalSupplyToken0.sub(reserve0).sub(swapAmount))
+    expect(await token1.balanceOf(wallet.address)).to.eq(totalSupplyToken1.sub(reserve1).add(expectedOutputAmount))
   })
 
   it('swap:token1', async () => {
-    const token0Amount = expandTo18Decimals(5)
-    const token1Amount = expandTo18Decimals(10)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(5)
+    const reserve1 = expandTo18Decimals(10)
+    await addLiquidity(reserve0, reserve1)
 
     const swapAmount = expandTo18Decimals(1)
     const expectedOutputAmount = bigNumberify('453305446940074565')
@@ -147,25 +147,25 @@ describe('UniswapV2Pair', () => {
       .to.emit(token0, 'Transfer')
       .withArgs(pair.address, wallet.address, expectedOutputAmount)
       .to.emit(pair, 'Sync')
-      .withArgs(token0Amount.sub(expectedOutputAmount), token1Amount.add(swapAmount))
+      .withArgs(reserve0.sub(expectedOutputAmount), reserve1.add(swapAmount))
       .to.emit(pair, 'Swap')
       .withArgs(wallet.address, 0, swapAmount, expectedOutputAmount, 0, wallet.address)
 
     const reserves = await pair.getReserves()
-    expect(reserves[0]).to.eq(token0Amount.sub(expectedOutputAmount))
-    expect(reserves[1]).to.eq(token1Amount.add(swapAmount))
-    expect(await token0.balanceOf(pair.address)).to.eq(token0Amount.sub(expectedOutputAmount))
-    expect(await token1.balanceOf(pair.address)).to.eq(token1Amount.add(swapAmount))
+    expect(reserves[0]).to.eq(reserve0.sub(expectedOutputAmount))
+    expect(reserves[1]).to.eq(reserve1.add(swapAmount))
+    expect(await token0.balanceOf(pair.address)).to.eq(reserve0.sub(expectedOutputAmount))
+    expect(await token1.balanceOf(pair.address)).to.eq(reserve1.add(swapAmount))
     const totalSupplyToken0 = await token0.totalSupply()
     const totalSupplyToken1 = await token1.totalSupply()
-    expect(await token0.balanceOf(wallet.address)).to.eq(totalSupplyToken0.sub(token0Amount).add(expectedOutputAmount))
-    expect(await token1.balanceOf(wallet.address)).to.eq(totalSupplyToken1.sub(token1Amount).sub(swapAmount))
+    expect(await token0.balanceOf(wallet.address)).to.eq(totalSupplyToken0.sub(reserve0).add(expectedOutputAmount))
+    expect(await token1.balanceOf(wallet.address)).to.eq(totalSupplyToken1.sub(reserve1).sub(swapAmount))
   })
 
   it('swap:gas', async () => {
-    const token0Amount = expandTo18Decimals(5)
-    const token1Amount = expandTo18Decimals(10)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(5)
+    const reserve1 = expandTo18Decimals(10)
+    await addLiquidity(reserve0, reserve1)
 
     // ensure that setting price{0,1}CumulativeLast for the first time doesn't affect our gas math
     await mineBlock(provider, (await provider.getBlock('latest')).timestamp + 1)
@@ -181,9 +181,9 @@ describe('UniswapV2Pair', () => {
   })
 
   it('burn', async () => {
-    const token0Amount = expandTo18Decimals(3)
-    const token1Amount = expandTo18Decimals(3)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(3)
+    const reserve1 = expandTo18Decimals(3)
+    await addLiquidity(reserve0, reserve1)
 
     const expectedLiquidity = expandTo18Decimals(3)
     await pair.transfer(pair.address, expectedLiquidity.sub(MINIMUM_LIQUIDITY))
@@ -191,13 +191,13 @@ describe('UniswapV2Pair', () => {
       .to.emit(pair, 'Transfer')
       .withArgs(pair.address, AddressZero, expectedLiquidity.sub(MINIMUM_LIQUIDITY))
       .to.emit(token0, 'Transfer')
-      .withArgs(pair.address, wallet.address, token0Amount.sub(1000))
+      .withArgs(pair.address, wallet.address, reserve0.sub(1000))
       .to.emit(token1, 'Transfer')
-      .withArgs(pair.address, wallet.address, token1Amount.sub(1000))
+      .withArgs(pair.address, wallet.address, reserve1.sub(1000))
       .to.emit(pair, 'Sync')
       .withArgs(1000, 1000)
       .to.emit(pair, 'Burn')
-      .withArgs(wallet.address, token0Amount.sub(1000), token1Amount.sub(1000), wallet.address)
+      .withArgs(wallet.address, reserve0.sub(1000), reserve1.sub(1000), wallet.address)
 
     expect(await pair.balanceOf(wallet.address)).to.eq(0)
     expect(await pair.totalSupply()).to.eq(MINIMUM_LIQUIDITY)
@@ -210,15 +210,15 @@ describe('UniswapV2Pair', () => {
   })
 
   it('price{0,1}CumulativeLast', async () => {
-    const token0Amount = expandTo18Decimals(3)
-    const token1Amount = expandTo18Decimals(3)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(3)
+    const reserve1 = expandTo18Decimals(3)
+    await addLiquidity(reserve0, reserve1)
 
     const blockTimestamp = (await pair.getReserves())[2]
     await mineBlock(provider, blockTimestamp + 1)
     await pair.sync(overrides)
 
-    const initialPrice = encodePrice(token0Amount, token1Amount)
+    const initialPrice = encodePrice(reserve0, reserve1)
     expect(await pair.price0CumulativeLast()).to.eq(initialPrice[0])
     expect(await pair.price1CumulativeLast()).to.eq(initialPrice[1])
     expect((await pair.getReserves())[2]).to.eq(blockTimestamp + 1)
@@ -243,9 +243,9 @@ describe('UniswapV2Pair', () => {
   })
 
   it('feeTo:off', async () => {
-    const token0Amount = expandTo18Decimals(1000)
-    const token1Amount = expandTo18Decimals(1000)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(1000)
+    const reserve1 = expandTo18Decimals(1000)
+    await addLiquidity(reserve0, reserve1)
 
     const swapAmount = expandTo18Decimals(1)
     const expectedOutputAmount = bigNumberify('996006981039903216')
@@ -261,9 +261,9 @@ describe('UniswapV2Pair', () => {
   it('feeTo:on', async () => {
     await factory.setFeeTo(other.address)
 
-    const token0Amount = expandTo18Decimals(1000)
-    const token1Amount = expandTo18Decimals(1000)
-    await addLiquidity(token0Amount, token1Amount)
+    const reserve0 = expandTo18Decimals(1000)
+    const reserve1 = expandTo18Decimals(1000)
+    await addLiquidity(reserve0, reserve1)
 
     const swapAmount = expandTo18Decimals(1)
     const expectedOutputAmount = bigNumberify('996006981039903216')
